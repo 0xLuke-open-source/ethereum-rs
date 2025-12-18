@@ -1,9 +1,9 @@
 use crate::errors::error::AppError;
 use crate::models::db::schema::eth_block;
-use crate::models::domain::block::Block;
 use bigdecimal::{BigDecimal, FromPrimitive};
 use diesel::{Insertable, Queryable};
 use serde::{Deserialize, Serialize};
+use crate::models::BlockDomain;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Insertable)]
 #[diesel(table_name = eth_block)]
@@ -25,10 +25,10 @@ pub struct BlockRow {
     pub parent_hash: String,
 }
 
-impl TryFrom<Block> for BlockInsert {
+impl TryFrom<BlockDomain> for BlockInsert {
     type Error = AppError;
 
-    fn try_from(block: Block) -> Result<BlockInsert, Self::Error> {
+    fn try_from(block: BlockDomain) -> Result<BlockInsert, Self::Error> {
         let gas_used = BigDecimal::from_i64(block.gas_used as i64).ok_or_else(|| {
             AppError::Conversion(format!(
                 "区块 {}: gas_used ({}) 转换为 BigDecimal 失败",

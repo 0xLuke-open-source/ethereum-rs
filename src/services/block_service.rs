@@ -1,8 +1,9 @@
 use crate::config::EthereumConfig;
 use crate::errors::error::AppError;
+use crate::infrastructure::parser::EventParser;
 use crate::infrastructure::provider::ethereum_provider::EthereumProvider;
 use crate::infrastructure::provider::{ProviderTrait, RetryAdapter};
-use crate::models::domain::Block;
+use crate::models::BlockDomain;
 use crate::models::domain::block::BlockQuery;
 use crate::models::domain::transfer::Transfer;
 use crate::repositories::block_repository::BlockRepository;
@@ -23,30 +24,31 @@ pub struct BlockService {
     pub config: Arc<EthereumConfig>,
     pub block_repository: Arc<BlockRepository>,
     pub transaction_repository: Arc<TransactionRepository>,
-    // 使用 trait object，支持多态（可以是 EthereumProvider 或 RetryAdapter）
     pub provider: Arc<dyn ProviderTrait>,
+    event_parser: Arc<EventParser>,
 }
 
 impl BlockService {
     pub fn new(
         block_repository: Arc<BlockRepository>,
         transaction_repository: Arc<TransactionRepository>,
-        provider: Arc<EthereumProvider>,
         config: Arc<EthereumConfig>,
     ) -> Self {
         // 1. 创建基础的 provider 池（支持多个 api_key）
         let eth_provider = Arc::new(EthereumProvider::new(&config));
         // 2. 包裹重试适配器（可在这里配置重试次数和初始延迟）
-        let retry_adapter = Arc::new(RetryAdapter::new(
+        let provider = Arc::new(RetryAdapter::new(
             eth_provider,
-            config.max_retries, // 最大重试次数
-            Duration::from_secs(config.base_delay_secs), // 初始延迟 2s，之后指数增长：2s → 4s → 8s → 16s
+            config.max_retries,
+            Duration::from_secs(config.base_delay_secs),
         )) as Arc<dyn ProviderTrait>;
+        let event_parser = Arc::new(EventParser::new(provider.clone()));
         Self {
+            config,
+            provider,
             block_repository,
             transaction_repository,
-            provider: retry_adapter,
-            config,
+            event_parser,
         }
     }
 
@@ -89,7 +91,6 @@ impl BlockService {
         while next_block <= max_safe_block {
             let block_number = next_block.as_u64();
 
-            // 这里不再手动处理 None 和 Err —— 重试逻辑已由 RetryAdapter 接管
             // 如果最终仍失败，会直接返回 AppError，被外层捕获
             let block_data = match self.provider.get_block_with_txs(block_number).await {
                 Ok(Some(block)) => block, // 成功获取区块
@@ -148,88 +149,36 @@ impl BlockService {
 
     async fn process_and_save_block(
         &self,
-        current_block: U64,
+        block_height: U64,
         block: ethers_core::types::Block<Transaction>,
     ) -> Result<(), AppError> {
-        log_info!("当前解析入库区块:{}", current_block);
-
-        let block_number = option_u64_to_i64(block.number)?;
-        let block_hash = h256_opt_to_string(block.hash);
-        let block_parent_hash = h256_to_string(block.parent_hash);
-        let gas_used = u256_to_i64(block.gas_used)?;
-        let base_fee_per_gas = opt_u256_to_i64_loose(block.base_fee_per_gas)?;
-        let block_timestamp = u256_to_i64(block.timestamp)?;
-        let size: i32 = block
-            .transactions
-            .len()
-            .try_into()
-            .map_err(|_| AppError::InvalidNumber("transactions count overflow".into()))?;
-
-        let new_block = Block::new(
-            block_number,
-            block_hash,
-            block_parent_hash,
-            gas_used as f64,
-            base_fee_per_gas as f64,
-            block_timestamp,
-            size,
-        );
-
+        log_info!("当前解析入库区块:{}", block_height);
+        let block_domain = BlockDomain::from_ethers(&block)?;
         //保存区块
-        self.block_repository.save(&new_block).await?;
+        self.block_repository.save(&block_domain).await?;
 
-        let mut processed_transfers = vec![];
-        let mut skipped_tx_count = 0;
+        // 委托给 EventParser 解析事件
+        let (transfers, skipped_count) = self
+            .event_parser
+            .parse_transfers_from_block(&block, block_domain.block_number, block_domain.timestamp)
+            .await?;
 
-        for tx in block.transactions {
-            let tx_hash = format!("{:#x}", tx.hash);
-            if !is_target_transaction(&tx) {
-                skipped_tx_count += 1;
-                // 忽略其他合约交互、L2 交易等
-                // log_info!("不是目标交易,跳过 {:?}", tx_hash);
-                continue;
-            }
-            // log_info!("TX_FOUND: Hash={:#x}, From={:#x}, To={:?}",  tx.hash, tx.from, tx.to);
-            // 获取交易收据（已自动带重试）
-            let receipt = match self.provider.get_transaction_receipt(tx.hash).await {
-                Ok(Some(r)) => r,
-                Ok(None) => {
-                    log_warn!("交易 {} 收据不存在，跳过", tx_hash);
-                    skipped_tx_count += 1;
-                    continue;
-                }
-                Err(e) => {
-                    log_error!("交易 {} 获取收据失败: {:?}, 跳过", tx_hash, e);
-                    skipped_tx_count += 1;
-                    continue;
-                }
-            };
-
-            if receipt.status != Some(U64::from(1)) {
-                log_warn!("交易 {} 执行失败（status=0），跳过", tx_hash);
-                skipped_tx_count += 1;
-                continue;
-            }
-
-            // 解析交易
-            let transfers =
-                Transfer::process_transaction(tx, receipt, block_number, block_timestamp).await;
-            processed_transfers.extend(transfers);
+        // 批量保存转账
+        if !transfers.is_empty() {
+            self.transaction_repository.batch_save(&transfers).await?;
+            log_info!(
+                "区块 {} 保存转账 {} 笔，跳过交易 {} 笔",
+                block_height,
+                transfers.len(),
+                skipped_count
+            );
+        } else {
+            log_info!(
+                "区块 {} 无转账事件，跳过交易 {} 笔",
+                block_height,
+                skipped_count
+            );
         }
-
-        // 批量保存
-        if !processed_transfers.is_empty() {
-            self.transaction_repository
-                .batch_save(&processed_transfers)
-                .await?;
-        }
-
-        log_info!(
-            "区块 {} 处理完成, 解析交易数: {}, 跳过交易数: {}",
-            block_number,
-            processed_transfers.len(),
-            skipped_tx_count
-        );
         Ok(())
     }
 }

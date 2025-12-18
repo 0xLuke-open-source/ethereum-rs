@@ -42,7 +42,6 @@ impl Application {
         // 全局存储服务实例（或通过参数传递，此处简化为全局静态，生产建议用依赖注入框架）
 
         // Repository 层
-        let provider = Arc::new(EthereumProvider::new(&config.ethereum));
         let block_repo = Arc::new(BlockRepository::new(db_pool.clone()));
         let transaction_repo = Arc::new(TransactionRepository::new(db_pool.clone()));
         // let tx_repo = Arc::new(TxRepository::new(db_pool.clone()));
@@ -52,7 +51,6 @@ impl Application {
         let block_service = Arc::new(BlockService::new(
             block_repo,
             transaction_repo,
-            provider.clone(),
             Arc::new(config.ethereum),
         ));
         // let tx_service = Arc::new(TxService::new(tx_repo));

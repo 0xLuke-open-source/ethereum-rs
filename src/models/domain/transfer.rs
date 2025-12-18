@@ -103,7 +103,7 @@ impl Transfer {
     }
 
     ///解析交易
-    pub async fn process_transaction(
+    pub fn process_transaction(
         tx: Transaction,
         receipt: TransactionReceipt,
         block_number: i64,

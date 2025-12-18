@@ -1,7 +1,6 @@
 use crate::database::diesel::DbPool;
 use crate::errors::error::AppError;
 use crate::models::block_db::{BlockInsert, BlockRow};
-use crate::models::domain::block::Block;
 use crate::models::schema::eth_block::dsl::eth_block;
 use crate::models::schema::eth_block::{block_hash, block_number, parent_hash};
 use crate::models::schema::eth_block_db;
@@ -10,6 +9,7 @@ use crate::repositories::traits::repository::Repository;
 use async_trait::async_trait;
 use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl};
 use tokio::task;
+use crate::models::BlockDomain;
 
 #[derive(Clone)]
 pub struct BlockRepository {
@@ -35,12 +35,12 @@ impl BlockRepository {
 }
 
 #[async_trait]
-impl Repository<Block, i64> for BlockRepository {
-    async fn find_by_id(&self, id: i64) -> Result<Option<Block>, AppError> {
+impl Repository<BlockDomain, i64> for BlockRepository {
+    async fn find_by_id(&self, id: i64) -> Result<Option<BlockDomain>, AppError> {
         todo!()
     }
 
-    async fn save(&self, block: &Block) -> Result<(), AppError> {
+    async fn save(&self, block: &BlockDomain) -> Result<(), AppError> {
         let self_clone = self.clone();
         let block_clone = block.clone();
         let result = task::spawn_blocking(move || -> Result<(), AppError> {
@@ -60,7 +60,7 @@ impl Repository<Block, i64> for BlockRepository {
         }
     }
 
-    async fn batch_save(&self, entities: &Vec<Block>) -> Result<(), AppError> {
+    async fn batch_save(&self, entities: &Vec<BlockDomain>) -> Result<(), AppError> {
         todo!()
     }
 
@@ -68,11 +68,11 @@ impl Repository<Block, i64> for BlockRepository {
         todo!()
     }
 
-    async fn find_all(&self) -> Result<Vec<Block>, AppError> {
+    async fn find_all(&self) -> Result<Vec<BlockDomain>, AppError> {
         todo!()
     }
 
-    async fn update(&self, entity: &Block) -> Result<(), AppError> {
+    async fn update(&self, entity: &BlockDomain) -> Result<(), AppError> {
         todo!()
     }
 
