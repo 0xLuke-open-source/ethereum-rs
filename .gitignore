@@ -1,0 +1,28 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Environment
+.env
+.secret
+*.key
+*.pem
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+config/*.yaml
+config/*.toml
+!config/example.*
+
+# 其他
+Cargo.lock  # 注意：应用项目建议提交，库项目不建议
