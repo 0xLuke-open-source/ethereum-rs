@@ -1,36 +1,34 @@
-use crate::database::diesel::DbPool;
 use crate::errors::error::AppError;
+use crate::models::BlockDomain;
 use crate::models::block_db::{BlockInsert, BlockRow};
-use crate::models::schema::eth_block::dsl::eth_block;
-use crate::models::schema::eth_block::{block_hash, block_number, parent_hash};
+use crate::models::schema::eth_block::block_number;
 use crate::models::schema::eth_block_db;
-use crate::repositories::base::repository_base::RepositoryBase;
 use crate::repositories::traits::repository::Repository;
 use async_trait::async_trait;
-use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl};
-use tokio::task;
-use crate::models::BlockDomain;
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
 #[derive(Clone)]
-pub struct BlockRepository {
-    base: RepositoryBase,
-}
+pub struct BlockRepository {}
 
 impl BlockRepository {
-    pub fn new(pool: DbPool) -> Self {
-        Self {
-            base: RepositoryBase::new(pool),
-        }
+    pub fn new() -> Self {
+        Self {}
     }
-    pub fn get_last_block_number(&self) -> Result<Option<BlockRow>, AppError> {
-        let mut conn = self.base.get_connection()?;
-        let block = eth_block
+
+    pub async fn get_last_block_number(
+        &self,
+        conn: &mut AsyncPgConnection,
+    ) -> Result<Option<BlockRow>, AppError> {
+        use crate::models::schema::eth_block::dsl::*;
+        use diesel::{ExpressionMethods, OptionalExtension, QueryDsl};
+
+        eth_block
             .select((block_number, block_hash, parent_hash))
             .order_by(block_number.desc())
-            .first::<BlockRow>(&mut conn)
+            .first::<BlockRow>(conn)
+            .await
             .optional()
-            .map_err(|e| self.base.map_diesel_error(e))?;
-        Ok(block)
+            .map_err(|e| AppError::DatabaseError(e.to_string()))
     }
 }
 
@@ -40,27 +38,24 @@ impl Repository<BlockDomain, i64> for BlockRepository {
         todo!()
     }
 
-    async fn save(&self, block: &BlockDomain) -> Result<(), AppError> {
-        let self_clone = self.clone();
-        let block_clone = block.clone();
-        let result = task::spawn_blocking(move || -> Result<(), AppError> {
-            let mut conn = self_clone.base.get_connection()?;
-            let diesel_block: BlockInsert = block_clone.try_into()?;
-            diesel::insert_into(eth_block_db)
-                .values(&diesel_block)
-                .on_conflict(block_number)
-                .do_nothing()
-                .execute(&mut conn)?;
-            Ok(())
-        })
-        .await?;
-        match result {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e),
-        }
+    // 之前是同步获取连接，现在改为外部传入异步连接
+    async fn save(
+        &self,
+        conn: &mut AsyncPgConnection,
+        block: &BlockDomain,
+    ) -> Result<(), AppError> {
+        let diesel_block: BlockInsert = block.clone().try_into()?;
+        diesel::insert_into(eth_block_db)
+            .values(&diesel_block)
+            .on_conflict(block_number)
+            .do_nothing()
+            .execute(conn) // 直接在异步连接上执行
+            .await
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        Ok(())
     }
 
-    async fn batch_save(&self, entities: &Vec<BlockDomain>) -> Result<(), AppError> {
+    async fn batch_save(&self, conn: &mut AsyncPgConnection, entities: &Vec<BlockDomain>) -> Result<(), AppError> {
         todo!()
     }
 

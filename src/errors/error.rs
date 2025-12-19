@@ -1,6 +1,5 @@
 use diesel::result::Error as DieselError;
 use ethers_providers::ProviderError;
-use r2d2::Error as R2d2Error;
 use redis::RedisError;
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -10,10 +9,6 @@ pub enum AppError {
     // 捕获所有 SQL 执行、ORM 映射错误、NotFound 错误等。
     #[error("Database query error: {0}")]
     DatabaseQuery(#[from] DieselError),
-
-    // 处理从连接池获取连接失败的情况（通常包含底层的 ConnectionError）。
-    #[error("Database connection pool error: {0}")]
-    ConnectionPool(#[from] R2d2Error),
 
     #[error("Redis error: {0}")]
     Redis(#[from] RedisError),
@@ -95,9 +90,7 @@ pub enum AppError {
     },
 }
 
-impl AppError {
-
-}
+impl AppError {}
 
 #[derive(Error, Debug)]
 pub enum SyncError {
@@ -116,7 +109,6 @@ impl AppError {
         AppError::Internal(message.to_string())
     }
 }
-
 
 impl From<ProviderError> for AppError {
     fn from(err: ProviderError) -> Self {
