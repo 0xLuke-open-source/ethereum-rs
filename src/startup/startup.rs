@@ -3,6 +3,7 @@ use std::time::Duration;
 use tracing::info;
 
 use crate::config::Config;
+use crate::config::filter_config::FilterConfig;
 use crate::database::diesel::{DbService, create_async_db_pool};
 use crate::errors::error::AppError;
 use crate::infrastructure::parser::EventParser;
@@ -21,6 +22,12 @@ pub type Result<T> = std::result::Result<T, AppError>;
 impl Application {
     /// 构建应用实例（仅初始化数据库/Redis，不启动服务）
     pub async fn build(config: Config) -> Result<Self> {
+        let filter_config = Arc::new(FilterConfig::load());
+        log_info!(
+            "Filter configuration loaded: {} contracts, {} address",
+            &filter_config.contracts.len(),
+            &filter_config.addresses.len(),
+        );
         // 初始化异步池
         let db_pool = create_async_db_pool(&config.database).await?;
         let db_service = Arc::new(DbService { pool: db_pool });
@@ -44,6 +51,7 @@ impl Application {
         // 3. 实例化 BlockService
         let block_service = Arc::new(BlockService::new(
             Arc::new(config.ethereum),
+            filter_config,
             block_repo,
             tx_repo,
             db_service,
@@ -61,12 +69,12 @@ impl Application {
                 match s1.sync_blocks().await {
                     Ok(()) => {
                         // 区块同步成功，立即尝试同步下一个
-                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        // tokio::time::sleep(Duration::from_secs(1)).await;
                     }
                     Err(e) => {
                         tracing::error!("同步区块失败: {:?}", e);
                         // 失败后等待一段时间后重试，避免高速失败
-                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        tokio::time::sleep(Duration::from_secs(1)).await;
                     }
                 }
             }

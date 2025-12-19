@@ -54,6 +54,7 @@ async-trait = "0.1.89"
 lazy_static = "1.5.0"
 url = { version = "2.5.7", features = ["serde"] }
 rand = { version = "0.8.5", features = ["std"] }
+toml = "0.8.23"
 
 
 #[dev-dependencies]

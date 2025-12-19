@@ -5,6 +5,7 @@ use crate::utils::is_target_transaction;
 use crate::{log_error, log_warn};
 use ethers_core::types::{Transaction, U64};
 use std::sync::Arc;
+use crate::config::filter_config::FilterConfig;
 
 pub struct EventParser {
     provider: Arc<dyn ProviderTrait>,
@@ -21,12 +22,22 @@ impl EventParser {
         block: &ethers_core::types::Block<Transaction>,
         block_number: i64,
         block_timestamp: i64,
+        filter_config: &FilterConfig,
     ) -> Result<(Vec<Transfer>, usize), AppError> {
         let mut transfers = Vec::new();
         let mut skipped_count = 0;
 
         for tx in &block.transactions {
             if !is_target_transaction(tx) {
+                skipped_count += 1;
+                continue;
+            }
+
+            let is_potential_target = filter_config.addresses.contains(&tx.from)
+                || tx.to.map_or(false, |to| filter_config.addresses.contains(&to))
+                || tx.to.map_or(false, |to| filter_config.contracts.contains(&to));
+
+            if !is_potential_target {
                 skipped_count += 1;
                 continue;
             }
@@ -57,6 +68,7 @@ impl EventParser {
                 receipt,
                 block_number,
                 block_timestamp,
+                filter_config,
             );
 
             transfers.append(&mut tx_transfers);

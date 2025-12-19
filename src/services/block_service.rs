@@ -1,4 +1,5 @@
 use crate::config::EthereumConfig;
+use crate::config::filter_config::FilterConfig;
 use crate::database::diesel::{DbService, TransactionExecutor};
 use crate::errors::error::AppError;
 use crate::infrastructure::parser::EventParser;
@@ -18,6 +19,7 @@ use std::time::Duration;
 
 pub struct BlockService {
     pub config: Arc<EthereumConfig>,
+    pub filter_config: Arc<FilterConfig>,
     pub block_repository: Arc<BlockRepository>,
     pub transaction_repository: Arc<TransactionRepository>,
     pub db_service: Arc<DbService>,
@@ -28,6 +30,7 @@ pub struct BlockService {
 impl BlockService {
     pub fn new(
         config: Arc<EthereumConfig>,
+        filter_config: Arc<FilterConfig>,
         block_repository: Arc<BlockRepository>,
         transaction_repository: Arc<TransactionRepository>,
         db_service: Arc<DbService>,
@@ -36,6 +39,7 @@ impl BlockService {
     ) -> Self {
         Self {
             config,
+            filter_config,
             block_repository,
             transaction_repository,
             db_service,
@@ -155,7 +159,12 @@ impl BlockService {
         let block_domain = BlockDomain::from_ethers(&block)?;
         let (tx, skipped_count) = self
             .event_parser
-            .parse_transfers_from_block(&block, block_domain.block_number, block_domain.timestamp)
+            .parse_transfers_from_block(
+                &block,
+                block_domain.block_number,
+                block_domain.timestamp,
+                &self.filter_config,
+            )
             .await?;
 
         let transfers = Arc::new(tx);

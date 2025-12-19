@@ -1,3 +1,4 @@
+use crate::config::filter_config::FilterConfig;
 use crate::infrastructure::protocol::constants::ERC20_TRANSFER_TOPIC;
 use crate::utils::format::u256_to_bigdecimal;
 use crate::utils::u256_to_i64;
@@ -108,11 +109,15 @@ impl Transfer {
         receipt: TransactionReceipt,
         block_number: i64,
         block_timestamp: i64,
+        filter: &FilterConfig,
     ) -> Vec<Transfer> {
         let mut transfers = vec![];
-        // ---------- ETH ----------
-        if let Some(_) = tx.to {
-            if !tx.value.is_zero() {
+        //ETH 转账过滤
+        if let Some(to_addr) = tx.to {
+            // 只要发送者或接收者在用户白名单中，且有金额
+            if !tx.value.is_zero()
+                && (filter.addresses.contains(&tx.from) || filter.addresses.contains(&to_addr))
+            {
                 transfers.push(Transfer::from_eth_tx(
                     &tx,
                     &receipt,
@@ -123,11 +128,27 @@ impl Transfer {
             }
         }
 
-        // ---------- ERC20 ----------
+        //  ERC20 转账过滤
         for log in receipt.logs.iter().filter(|log| {
-            log.topics.len() == 3
+            // 基础 ERC20 Topic 检查
+            let is_erc20 = log.topics.len() == 3
                 && log.topics[0] == *ERC20_TRANSFER_TOPIC
-                && log.data.0.len() == 32
+                && log.data.0.len() == 32;
+            if !is_erc20 {
+                return false;
+            }
+
+            //合约地址检查
+            let is_monitored_contract = filter.contracts.contains(&log.address);
+
+            // 用户地址检查 (从 Topic 解析 from/to)
+            let from_addr = H160::from(log.topics[1]);
+            let to_addr = H160::from(log.topics[2]);
+            let is_monitored_user =
+                filter.addresses.contains(&from_addr) || filter.addresses.contains(&to_addr);
+
+            // 必须是我们支持的合约 且 涉及我们支持的用户
+            is_monitored_contract && is_monitored_user
         }) {
             let value = U256::from_big_endian(&log.data.0);
             transfers.push(Transfer::from_erc20_log(
@@ -141,7 +162,6 @@ impl Transfer {
                 u256_to_i64(log.log_index.unwrap_or_default()).unwrap_or_default(),
             ));
         }
-
         transfers
     }
 }
