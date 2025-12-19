@@ -1,5 +1,5 @@
 use crate::config::EthereumConfig;
-use crate::config::filter_config::FilterConfig;
+use crate::config::filter_config::{FilterConfig, FilterConfigContainer};
 use crate::database::diesel::{DbService, TransactionExecutor};
 use crate::errors::error::AppError;
 use crate::infrastructure::parser::EventParser;
@@ -19,7 +19,7 @@ use std::time::Duration;
 
 pub struct BlockService {
     pub config: Arc<EthereumConfig>,
-    pub filter_config: Arc<FilterConfig>,
+    pub filter_config: Arc<FilterConfigContainer>,
     pub block_repository: Arc<BlockRepository>,
     pub transaction_repository: Arc<TransactionRepository>,
     pub db_service: Arc<DbService>,
@@ -30,7 +30,7 @@ pub struct BlockService {
 impl BlockService {
     pub fn new(
         config: Arc<EthereumConfig>,
-        filter_config: Arc<FilterConfig>,
+        filter_config: Arc<FilterConfigContainer>,
         block_repository: Arc<BlockRepository>,
         transaction_repository: Arc<TransactionRepository>,
         db_service: Arc<DbService>,
@@ -156,6 +156,7 @@ impl BlockService {
         block: ethers_core::types::Block<Transaction>,
     ) -> Result<(), AppError> {
         log_info!("当前解析入库区块:{}", block_height);
+        let current_filter = self.filter_config.load();
         let block_domain = BlockDomain::from_ethers(&block)?;
         let (tx, skipped_count) = self
             .event_parser
@@ -163,7 +164,7 @@ impl BlockService {
                 &block,
                 block_domain.block_number,
                 block_domain.timestamp,
-                &self.filter_config,
+                &current_filter,
             )
             .await?;
 

@@ -3,7 +3,7 @@ use std::time::Duration;
 use tracing::info;
 
 use crate::config::Config;
-use crate::config::filter_config::FilterConfig;
+use crate::config::filter_config::{FilterConfig, FilterConfigContainer};
 use crate::database::diesel::{DbService, create_async_db_pool};
 use crate::errors::error::AppError;
 use crate::infrastructure::parser::EventParser;
@@ -22,12 +22,9 @@ pub type Result<T> = std::result::Result<T, AppError>;
 impl Application {
     /// 构建应用实例（仅初始化数据库/Redis，不启动服务）
     pub async fn build(config: Config) -> Result<Self> {
-        let filter_config = Arc::new(FilterConfig::load());
-        log_info!(
-            "Filter configuration loaded: {} contracts, {} address",
-            &filter_config.contracts.len(),
-            &filter_config.addresses.len(),
-        );
+        //初始化带监听功能的配置容器
+        let filter_container = Arc::new(FilterConfigContainer::new());
+
         // 初始化异步池
         let db_pool = create_async_db_pool(&config.database).await?;
         let db_service = Arc::new(DbService { pool: db_pool });
@@ -51,7 +48,7 @@ impl Application {
         // 3. 实例化 BlockService
         let block_service = Arc::new(BlockService::new(
             Arc::new(config.ethereum),
-            filter_config,
+            Arc::clone(&filter_container),
             block_repo,
             tx_repo,
             db_service,
