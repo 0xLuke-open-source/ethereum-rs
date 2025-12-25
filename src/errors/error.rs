@@ -90,6 +90,10 @@ pub enum AppError {
     },
 }
 
+impl AppError {
+
+}
+
 impl AppError {}
 
 #[derive(Error, Debug)]

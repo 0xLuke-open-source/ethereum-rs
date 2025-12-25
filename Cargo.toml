@@ -9,7 +9,7 @@ default-run = "ethereum-rs"
 
 [dependencies]
 tokio = { version = "1.47.2", features = ["full"] }
-ethers = { version = "2.0.14" }  # 启用全功能+tokio异步运行时
+ethers = { version = "2.0.14"}  # 启用全功能+tokio异步运行时
 ethers-core = "2.0.14"  # 核心类型和trait
 ethers-providers = "2.0.14"  # JSON-RPC客户端
 ethers-signers = "2.0.14"  # 签名功能

@@ -1,14 +1,15 @@
 use super::ethereum_provider::{EthereumProvider, ProviderTrait};
 use crate::errors::error::AppError;
-use crate::log_warn;
+use crate::{log_info, log_warn};
 use async_trait::async_trait;
 use ethers::prelude::{U64, U256};
 use ethers::providers::ProviderError;
-use ethers_core::types::{Address, Block, H256, Transaction, TransactionReceipt};
-use ethers_providers::Middleware;
+use ethers_core::types::transaction::eip2718::TypedTransaction;
+use ethers_core::types::{Address, Block, Bytes, H256, Transaction, TransactionReceipt};
+use ethers_providers::{Http, Middleware, PendingTransaction};
+use rand::Rng;
 use std::sync::Arc;
 use std::time::Duration;
-use rand::Rng;
 use tokio::time::sleep;
 
 pub struct RetryAdapter {
@@ -18,7 +19,11 @@ pub struct RetryAdapter {
 }
 
 impl RetryAdapter {
-    pub fn new(provider: Arc<EthereumProvider>, max_retries: usize, base_delay_secs: Duration) -> Self {
+    pub fn new(
+        provider: Arc<EthereumProvider>,
+        max_retries: usize,
+        base_delay_secs: Duration,
+    ) -> Self {
         Self {
             provider,
             max_retries,
@@ -28,7 +33,7 @@ impl RetryAdapter {
 
     async fn retry_call<T, Fut, F>(&self, mut f: F) -> Result<T, AppError>
     where
-        F: FnMut(Arc<ethers_providers::Provider<ethers_providers::Http>>) -> Fut + Send + Copy,
+        F: FnMut(Arc<ethers_providers::Provider<ethers_providers::Http>>) -> Fut + Send,
         Fut: std::future::Future<Output = Result<T, ProviderError>> + Send,
     {
         let mut last_error: Option<ProviderError> = None;
@@ -109,5 +114,79 @@ impl ProviderTrait for RetryAdapter {
 
         self.retry_call(move |p| async move { p.get_transaction_count(addr, None).await })
             .await
+    }
+
+    async fn estimate_eip1559_fees(
+        &self,
+        estimator: Option<fn(U256, Vec<Vec<U256>>) -> (U256, U256)>,
+    ) -> Result<(U256, U256), AppError> {
+        let estimator = estimator;
+        self.retry_call(move |p| async move { p.estimate_eip1559_fees(estimator).await })
+            .await
+    }
+
+    async fn send_raw_transaction(
+        &self,
+        rlp: Bytes,
+        timeout_secs: u64,
+        confirmations: usize,
+    ) -> Result<TransactionReceipt, AppError> {
+        // 1. 调用 retry_call，内部只处理网络/节点层的重试
+        let receipt = self
+            .retry_call(move |p| {
+                let rlp = rlp.clone();
+                async move {
+                    // 1. 发送交易
+                    let pending_tx = p.send_raw_transaction(rlp).await?;
+
+                    // 2. 等待确认 (将等待逻辑也放入重试闭包内)
+                    // 注意：如果等待超时，也会触发重试
+                    let wait_res = tokio::time::timeout(
+                        Duration::from_secs(timeout_secs),
+                        pending_tx.confirmations(confirmations),
+                    )
+                    .await;
+                    // 处理超时和结果，并统一转为 ProviderError 以便触发重试
+                    match wait_res {
+                        Ok(Ok(Some(r))) => Ok(r),
+                        Ok(Ok(None)) => {
+                            Err(ProviderError::CustomError("Dropped from mempool".into()))
+                        }
+                        Ok(Err(e)) => Err(e), // Provider 级错误
+                        Err(_) => Err(ProviderError::CustomError("Timeout".into())),
+                    }
+                }
+            })
+            .await?;
+        //2. 拿到回执后，在重试逻辑外检查业务状态 (Status)
+        // 这样如果 Revert，会直接返回给上层，而不会在 RetryAdapter 里盲目重试
+        if receipt.status == Some(0.into()) {
+            return Err(AppError::Internal(format!(
+                "Transaction reverted! Hash: {:?}",
+                receipt.transaction_hash
+            )));
+        }
+        log_info!(
+            "交易执行成功: hash={:?}, block={:?}",
+            receipt.transaction_hash,
+            receipt.block_number
+        );
+        Ok(receipt)
+    }
+
+    async fn call(&self, tx: &TypedTransaction) -> Result<Bytes, AppError> {
+        self.retry_call(move |p| async move {
+            let tx = tx.clone();
+            p.call(&tx, None).await
+        })
+        .await
+    }
+
+    async fn estimate_gas(&self, tx: &TypedTransaction) -> Result<U256, AppError> {
+        self.retry_call(move |p| async move {
+            let tx = tx.clone();
+            p.estimate_gas(&tx, None).await
+        })
+        .await
     }
 }
